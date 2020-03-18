@@ -1,0 +1,34 @@
+{
+  "name": "@trellisfw/masklink",
+  "version": "0.0.1",
+  "description": "Trellis Framework Mask&Link Library",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trellisfw/trellisfw-masklink.git"
+  },
+  "keywords": [
+    "mask",
+    "link",
+    "trellis",
+    "trellisfw"
+  ],
+  "author": "Aaron Ault",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/trellisfw/trellisfw-masklink/issues"
+  },
+  "homepage": "https://github.com/trellisfw/trellisfw-masklink#readme",
+  "dependencies": {
+    "@oada/oada-cache": "^3.1.2",
+    "@trellisfw/signatures": "^2.1.2",
+    "bluebird": "^3.7.2",
+    "debug": "^4.1.1",
+    "json-pointer": "^0.6.0",
+    "lodash": "^4.17.15",
+    "url": "^0.11.0"
+  }
+}
