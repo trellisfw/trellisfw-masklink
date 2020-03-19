@@ -22,6 +22,15 @@ async function connectionOrToken({connection,token,domain}) {
 function makeNonce() {
   return tsig.jose.util.base64url.encode(tsig.jose.util.randomBytes(32));
 }
+function isMask(t) {
+  if (!t) return false;
+  if (t['trellis-mask']) t = t['trellis-mask'];
+  if (!t.hashinfo) return false;
+  return (typeof t.url === 'string'
+    && typeof t.nonceurl === 'string'
+    && typeof t.hashinfo.alg === 'string'
+    && typeof t.hashinfo.hash === 'string');
+}
 function domainFromURL(url) {
   const u = urllib.parse(url);
   let p = '';
@@ -409,6 +418,7 @@ module.exports = {
   verifyRemoteResource,                   // async, talks outside
 
   // Handy functions:
+  isMask,                     // sync
   domainForMask,              // sync
   findAllMaskPathsInResource, // sync
 };
