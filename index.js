@@ -24,6 +24,7 @@ function makeNonce() {
 }
 function isMask(t) {
   if (!t) return false;
+  if (typeof t !== 'object') return false; // a string or number cannot be a mask
   if (t['trellis-mask']) t = t['trellis-mask'];
   if (!t.hashinfo) return false;
   return (typeof t.url === 'string'

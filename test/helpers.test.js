@@ -98,6 +98,10 @@ describe('helper functions', function() {
       delete m.hashinfo;
       expect(ml.isMask(m)).to.equal(false);
     });
+    it('should fail for a string or number', function() {
+      expect(ml.isMask('notamask')).to.equal(false);
+      expect(ml.isMask(1)).to.equal(false);
+    });
   });
 
   describe('#findAllMaskPathsInResource', function() {
