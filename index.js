@@ -11,12 +11,22 @@ const  info = debug('trellisfw-masklink:info');
 const  warn = debug('trellisfw-masklink:warn');
 const error = debug('trellisfw-masklink:error');
 
+async function connectionOrToken({connection,token,domain}) {
+  if (!connection) {
+    if (!token) throw new Error('trellisfw-masklink#connectionOrToken: You must pass either a token or an oada-cache connection');
+    trace(`#connectionOrToken: No connection passed, creating one with token using inferred domain ${domain}`);
+    connection = await oada.connect({ domain, token, cache: false, websocket: false });
+  }
+  return connection;
+}
 function makeNonce() {
   return tsig.jose.util.base64url.encode(tsig.jose.util.randomBytes(32));
 }
 function domainFromURL(url) {
   const u = urllib.parse(url);
-  return u.origin; // https://some.domain:port 
+  let p = '';
+  if (u.port) p = ':'+u.port;
+  return u.protocol + '//' + u.host + p; // https://some.domain:port 
   // that's where the /.well-known should live
 }
 function pathFromURL(url) {
@@ -26,6 +36,10 @@ function pathFromURL(url) {
 // This one is exported because it is handy for creating connections to a domain
 function domainForMask(mask) {
   if (mask && mask['trellis-mask']) mask = mask['trellis-mask'];
+  if (!mask || !mask.url) {
+    warn('#domainForMask: warning: mask is null or has no valid url');
+    return false;
+  }
   return domainFromURL(mask.url);
 }
 // This is exported as well:
@@ -38,10 +52,11 @@ function findAllMaskPathsInResource(resource) {
     // Get paths for each key child and merge into one long list
     return _.reduce(_.keys(curobj), (acc,key) => {
       // concat paths from peers with all paths under this key
-      return acc.concat(recursiveFindMaskPaths(curobj[key], `${curpath}/${key}`));
+      const newpath = jsonpointer.compile(jsonpointer.parse(curpath).concat(key));
+      return acc.concat(recursiveFindMaskPaths(curobj[key], newpath));
     }, []);
   }
-  return recursiveFindMaskPaths(resource, '/');
+  return recursiveFindMaskPaths(resource, '');
 }
 
 
@@ -70,20 +85,21 @@ function mask({original, url, nonce, nonceurl}) {
     nonce = makeNonce(); // 256 bits of randomness in a base64 string
     trace(`#mask: created nonce ${nonce}`);
   }
+  trace('using nonce: ', nonce);
   if (!nonceurl) {
-    nonceurl = str.replace(/(resources\/[^\/]+)(.*)$/, '$1/_meta/nonces$2');
+    nonceurl = url.replace(/(resources\/[^\/]+)(.*)$/, '$1/_meta/nonces$2');
     trace(`#mask: no nonceurl was passed, defaulting to ${nonceurl}`);
   }
   const o = _.cloneDeep(original);
   o._nonce = nonce;
+  trace('hashing original = ', o);
   const tm = {
     version: '1.0',
-    original,
     hashinfo: tsig.hashJSON(o),
     url,
     nonceurl,
   };
-  trace(`#mask: returning mask = { "trellis-mask": ${mask} }`);
+  trace(`#mask: returning mask = { "trellis-mask": ${JSON.stringify(tm,false,'  ')} }`);
   return { nonce, nonceurl, mask: { 'trellis-mask': tm } };
 }
 
@@ -99,9 +115,13 @@ function verify({mask, original, nonce}) {
   if (mask && mask['trellis-mask']) {
     mask = mask['trellis-mask'];
   }
-  if (!mask || mask.version !== '1.0') {
-    trace(`#verify: Mask is null or version (${version}) is unknown`);
-    return { valid: false, match: false, details: [ `Mask is null or version (${mask.version}) is unknown`] };
+  if (!mask) {
+    trace(`#verify: Mask is null`);
+    return { valid: false, match: false, details: [ `Mask is null` ] };
+  }
+  if (mask.version !== '1.0') {
+    trace(`#verify: version (${mask.version}) is unknown`);
+    return { valid: false, match: false, details: [ `version (${mask.version}) is unknown`] };
   }
   if (!mask.hashinfo) {
     trace(`#verify: mask has no hashinfo`);
@@ -121,9 +141,9 @@ function verify({mask, original, nonce}) {
   const o = _.cloneDeep(original);
   o._nonce = nonce;
   const ohash = tsig.hashJSON(o);
-  details.push(`Comparing nonce-d original (${JSON.stringify(o)}) which hashes to (${ohash}) to mask hash (${mask.hashinfo})`);
+  details.push(`Comparing nonce-d original (${JSON.stringify(o)}) which hashes to (${JSON.stringify(ohash)}) to mask hash (${JSON.stringify(mask.hashinfo)})`);
   trace('#verify: '+details[details.length-1]); // print that message
-  const match = _.deepEqual(mask.hashinfo, ohash);
+  const match = _.isEqual(mask.hashinfo, ohash);
 
   return {valid,match,details};
 }
@@ -132,6 +152,12 @@ function verify({mask, original, nonce}) {
 //   mask: the masked object.  Required.
 //  token: string token.  Optional if you pass connection.
 //  connection: OADA cache connection.  Optional if you pass token
+//
+// Returns: 
+//   - valid: true|false same as verify()
+//   - match: true|false same as verify()
+//   - original: the fetched original
+//   - details: helpful array of debugging strings
 // NOTE: you must pass either token or a connection.  The assumption is that the nonce and URL are at the same cloud.
 async function verifyRemote({mask, token, connection}) {
   if (mask && mask['trellis-mask']) {
@@ -139,26 +165,22 @@ async function verifyRemote({mask, token, connection}) {
   }
   if (!mask.url) {
     trace('#verifyRemote: mask has no url');
-    return { valid: false, match: false, original: false, details: [ 'The mask has no url' ] };
+    return { valid: false, match: false, original: false, nonce: false, details: [ 'The mask has no url' ] };
   }
+  const domain = domainFromURL(mask.url);
+  connection = await connectionOrToken({token: (token ? token : false), connection: (connection ? connection : false), domain});
+
   details = [];
-  if (!connection) {
-    if (!token) throw new Error('trellisfw-masklink#verifyRemote: You must pass either a token or an oada-cache connection');
-    const domain = domainFromURL(mask.url);
-    trace(`#verifyRemote: No connection passed, creating one with token using inferred domain ${domain}`);
-    details.push(`Creating oada connection using domain ${domain} and the passed token`);
-    connection = oada.connect({ domain, token, cache: false });
-  }
   trace('#verifyRemote: Requesting original and nonce from remote');
-  const { original, nonce } = Promise.props({
+  const { original, nonce } = await Promise.props({
     original: connection.get({ path: pathFromURL(mask.url) }).then(r => r.data)
-              .catch(e => { details.push(`Failed to retrieve original.  Error was: ${e}`); return null; }),
+              .catch(e => { details.push(`Failed to retrieve original.  Error was: ${JSON.stringify(e)}`); return null; }),
        nonce: connection.get({ path: pathFromURL(mask.nonceurl) }).then(r => r.data)
-              .catch(e => { details.push(`Failed to retrieve nonce.  Error was: ${e}`);    return null; }),
+              .catch(e => { details.push(`Failed to retrieve nonce.  Error was: ${JSON.stringify(e)}`);    return null; }),
   })
   if (!original || !nonce) {
-    warn('#verifyRemote: '+details[details.length-1]);
-    return { valid: false, match: false, original: false, details };
+    warn(`#verifyRemote: failed original (${original}) or nonce (${nonce}). Details = `,details);
+    return { valid: false, match: false, original: false, nonce: false, details };
   }
 
   trace('#verifyRemote: retrieved original and nonce, sending to verify');
@@ -167,6 +189,7 @@ async function verifyRemote({mask, token, connection}) {
     valid: result.valid, 
     match: result.match, 
     original,
+    nonce,
     details: details.concat(result.details) 
   };
 }
@@ -217,15 +240,21 @@ async function signResource({resource, privateJWK, header, signer, paths }) {
 // Assumes that you want to put the nonce at <urlToResource>/_meta/nonce
 function maskResource({resource, urlToResource, paths, nonce, nonceurl}) {
   const r = _.cloneDeep(resource);
+  if (!urlToResource) {
+    warn('#maskResource: urlToResource is falsey, you need to pass one in order to figure out url\'s from paths');
+    return { nonce: false, resource: false, nonceurl: false };
+  }
   nonce = nonce || makeNonce();
   nonceurl = nonceurl || urlToResource+'/_meta/nonce';
   _.each(paths, p => {
     // get the thing to mask:
     const objToMask = jsonpointer.get(resource, p);
+    trace(`#maskResource: tried to jsonpoint.get path ${p} from resource, it returned `,objToMask);
     // construct the mask:
-    const { mask } = mask({objToMask, nonce, url: urlToResource+p, nonceurl });
+    const result = mask({original: objToMask, nonce, url: urlToResource+p, nonceurl });
     // replace the thing in the original with the mask
-    jsonpointer.set(r, p, mask);
+    trace(`#maskResource: setting path ${p} in resource to mask = `, result.mask);
+    jsonpointer.set(r, p, result.mask);
   });
   return { nonce, resource: r, nonceurl };
 }
@@ -235,12 +264,7 @@ function maskResource({resource, urlToResource, paths, nonce, nonceurl}) {
 async function maskRemoteResourceAsNewResource({ url, paths, token, connection, signatureCallback }) {
   const domain = domainFromURL(url);
   const path = pathFromURL(url);
-  if (!connection) {
-    if (!token) throw new Error('trellisfw-masklink#verifyRemote: You must pass either a token or an oada-cache connection');
-    trace(`#maskRemoteResource: No connection passed, creating one with token using inferred domain ${domain}`);
-    details.push(`Creating oada connection using domain ${domain} and the passed token`);
-    connection = oada.connect({ domain, token, cache: false });
-  }
+  connection = await connectionOrToken({token: (token ? token : false), connection: (connection ? connection : false), domain});
 
   trace('#maskRemoteResource: Requesting original from remote and creating new empty resource for our copy');
   const { original, newResource } = Promise.props({
@@ -324,11 +348,8 @@ async function reconstructOriginalFromMaskPaths(maskedResource, paths) {
 async function verifyRemoteResource({url, token, connection}) {
   const domain = domainFromURL(url);
   const path = pathFromURL(url);
-  if (!connection) {
-    if (!token) throw new Error('trellisfw-masklink#verifyRemote: You must pass either a token or an oada-cache connection');
-    trace(`#maskRemoteResource: No connection passed, creating one with token using inferred domain ${domain}`);
-    connection = oada.connect({ domain, token, cache: false });
-  }
+  connection = await connectionOrToken({token: (token ? token : false), connection: (connection ? connection : false)});
+
   const maskedResource = await connection.get({path: pathFromURL(url)}).then(r => r.data)
                                .catch(e => { throw new Error(`Failed to retrieve masked resource from path ${pathFromURL(url)}.  Error was: ${e}`) });
   // First, verify the signature so we can get the mask-paths from that
