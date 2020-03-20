@@ -84,11 +84,9 @@ function findAllMaskPathsInResource(resource) {
 // This returns an object with a `nonce` key and a `mask` key.  
 // The `mask` key looks like `{ trellis-mask: { ... } }`: i.e. it's the exact thing you replace the original with.
 // nonce: if you pass a nonce, it will use that.  If you don't, it will generate a random one.
-// nonceurl: whether you pass a nonce or not, you can specify where you intend to store the nonce for later retrieval.
-//           If you do not pass it, then if the regular url has `resources/<id>`, it will default to the same as the url but
-//           with a `_meta` inserted after the resources/<id> (if it has resources/<id> in it) and "nonce" added on the end.  
-//           For example, if the original url is https://some.domain/resources/12345/location, 
-//           the nonceurl would default to       https://some.domain/resources/12345/_meta/nonces/location
+// nonceurl: whether you pass a nonce or not, you must specify where you intend to store the nonce for later retrieval.
+//           IMPORTANT: this function does not store the nonce, that's up to you to do.  This just puts that nonceurl
+//           in the resulting mask.
 // NOTE: the url cannot terminate at a resource: i.e https://some.domain/resources/12345.  You can't mask an entire resource.
 function mask({original, url, nonce, nonceurl}) {
   if (!nonce) { 
@@ -97,8 +95,12 @@ function mask({original, url, nonce, nonceurl}) {
   }
   trace('using nonce: ', nonce);
   if (!nonceurl) {
-    nonceurl = url.replace(/(resources\/[^\/]+)(.*)$/, '$1/_meta/nonces$2');
-    trace(`#mask: no nonceurl was passed, defaulting to ${nonceurl}`);
+    error('#mask: No nonceurl passed');
+    throw new Error('no nonceurl was passed: you have to say where to store the nonce that I make.  You could do /resources/<resourceid>/_meta/nonce for a single nonce per resource');
+    // There is no guarantee that someone always uses the /resources path (as opposed to /bookmarks), so 
+    // we can't simply default to _meta/nonces/... like we wanted to without making this function async
+    // and fetching the thing to get the resources url in the content-location
+    //nonceurl = url.replace(/(resources\/[^\/]+)(.*)$/, '$1/_meta/nonces$2');
   }
   const o = _.cloneDeep(original);
   o._nonce = nonce;
@@ -272,19 +274,23 @@ function maskResource({resource, urlToResource, paths, nonce, nonceurl}) {
 // This creates a new resource on the OADA cloud that is a masked version of the original.
 // It does not modify the original, except that it stores the nonce at the original's _meta/nonce
 async function maskRemoteResourceAsNewResource({ url, paths, token, connection, signatureCallback }) {
+  if (!url) {
+    error('#maskRemoteResourceAsNewResource: you must pass a url');
+    throw new Error('#maskRemoteResourceAsNewResource: you must pass a url to mask');
+  }
+  if (!paths || paths.length < 1) {
+    error('#maskRemoteResourceAsNewResource: you must pass at least one path to mask in the resource');
+    throw new Error('#maskRemoteResourceAsNewResource: you must pass at least one path to mask in the resource');
+  }
   const domain = domainFromURL(url);
   const path = pathFromURL(url);
   connection = await connectionOrToken({token: (token ? token : false), connection: (connection ? connection : false), domain});
 
-  trace('#maskRemoteResource: Requesting original from remote and creating new empty resource for our copy');
-  const { original, newResource } = Promise.props({
-    original: connection.get({ path })
-              .then(r => r.data)
-              .catch(e => { throw new Error(`Could not get original resource at url ${url}.  Error was: ${e}`) }),
-    newResource: connection.post({ path: '/resources', data: {}, headers: { 'content-type': original._type } })
-                 .then(r => r.headers['content-location'].slice(1)) // get rid of leading slash for _id
-                 .catch(err => { throw new Error(`Could not create new empty resource for the copy.  Error was: ${err}`) }),
-  });
+  trace('#maskRemoteResourceAsNewResource: Requesting original from remote and creating new empty resource for our copy');
+  const original = await connection.get({ path })
+    .then(r => r.data)
+    .catch(e => { throw new Error(`Could not get original resource at url ${url}.  Error was: ${e}`) });
+  trace('#maskRemoteResourceAsNewResource: retrieved original, it is',original);
 
   // If we already have a nonce on the resource, use that instead of overwriting
   const nonceurl = url + '/_meta/nonce';
@@ -292,23 +298,29 @@ async function maskRemoteResourceAsNewResource({ url, paths, token, connection, 
   let havenonce = false;
   await connection.get({ path: pathFromURL(nonceurl) })
   .then(r => {
-    trace('#maskRemoteResource: original already has a nonce, re-using that');
+    trace('#maskRemoteResourceAsNewResource: original already has a nonce, re-using that');
     nonce = r.data;
   }).catch(async (e) => {
-    trace('#maskRemoteResource: original does not have a nonce, making a new one');
+    trace('#maskRemoteResourceAsNewResource: original does not have a nonce, making a new one and saving to '+pathFromURL(nonceurl));
     nonce = makeNonce();
-    await connection.put({ path: pathFromURL(nonceurl), data: nonce, headers: { 'content-type': original._type } })
+    await connection.put({ path: pathFromURL(nonceurl), data: JSON.stringify(nonce), headers: { 'content-type': original._type } })
           .catch(e => { throw new Error(`Could not save new nonce back to original resource!  error was ${e}`) });
   });
 
+  trace('#maskRemoteResourceAsNewResource: masking Resource content locally with maskResource');
   const { resource } = maskResource({resource: original, urlToResource: url, paths, nonce, nonceurl});
 
   // If you want to sign it, now is a good time
-  if (signatureCallback) resource = signatureCallback(resource);
+  if (signatureCallback) {
+    trace('#maskRemoteResourceAsNewResource: calling signatureCallback');
+    resource = signatureCallback(resource);
+  }
 
   // Now, put the resource back as the copy
-  await connection.put({ path: `/${newResource}`, data: resource, headers: { 'content-type': original._type } })
-                  .catch(err => { throw new Error(`Could not PUT masked resource into new resource copy.  Error was: '${err}`) });
+  const newResource = 
+    await connection.post({ path: `/resources`, data: resource, headers: { 'content-type': original._type } })
+                    .then(r => r.headers['content-location'].slice(1)) // get rid of leading slash for _id
+                    .catch(err => { throw new Error(`Could not PUT masked resource into new resource copy.  Error was: '${err}`) });
 
   return newResource; // return the id of the new resource that is the masked version
 }

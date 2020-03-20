@@ -98,24 +98,25 @@ describe('Single object (mask) functions', function() {
       const original = { 'donot': 'changeme' };
       const expected = _.cloneDeep(original);
       const url = t.mask1.location['trellis-mask'].url;
-      const result = ml.mask({original, url});
+      const nonceurl = t.mask1.location['trellis-mask'].nonceurl;
+      const result = ml.mask({original, url, nonceurl});
       expect(original).to.deep.equal(expected);
     });
 
-    it('should default to the correct nonceurl when none is passed', function() {
+    it('should throw when no nonceurl is passed', function() {
       const original = t.unmasked.location;
       const url = t.mask1.location['trellis-mask'].url;
       // default URL is "_meta/nonces/location" for a single object
       const expected = t.mask1.location['trellis-mask'].nonceurl + 's/location';
-      const result = ml.mask({original, url});
-      expect(result.nonceurl).to.equal(expected);
+      expect(() => ml.mask({original, url})).to.throw();
     });
 
-    it('should produce a hash different than a hash of just the original (i.e. it used the nonce', function() {
+    it('should produce a hash different than a hash of just the original (i.e. it used the nonce)', function() {
       const original = t.unmasked.location;
       const url = t.mask1.location['trellis-mask'].url;
+      const nonceurl = t.mask1.location['trellis-mask'].nonceurl;
       const unexpected = tsig.hashJSON(original);
-      const result = ml.mask({original, url});
+      const result = ml.mask({original, url, nonceurl});
       expect(result.mask['trellis-mask'].hashinfo).to.not.deep.equal(unexpected);
     });
   });
