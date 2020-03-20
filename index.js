@@ -229,20 +229,25 @@ async function signResource({resource, privateJWK, header, signer, paths }) {
   signer = signer || { name: 'No signer name available', url: 'https://github.com/trellisfw' },
   header = header || {};
   if (!header.jwk) {
+    trace('#signResource: did not pass header.jwk, extracting from private key');
     header.jwk = tsig.keys.pubFromPriv(privateJWK);
   }
   if (!header.kid) {
+    trace('#signResource: did not pass header.kid, extracting from private key');
     header.kid = privateJWK.kid;
   }
   if (!header.jku) {
+    trace('#signResource: did not pass header.jku, extracting from private key');
     header.jku = privateJWK.jku;
   }
-  const r = _.cloneDeep(resource);
   const payload = {};
-  if (paths) payload['mask-paths'] = paths;
-  // This mutates r
-  await tsig.sign(r, privateJWK, { signer, type: 'mask', payload });
-  return r;
+  if (paths) {
+    trace('#signResource: adding paths to signature: ', paths);
+    payload['mask-paths'] = paths;
+  }
+  resource = await tsig.sign(resource, privateJWK, { signer, type: 'mask', payload });
+  trace('#signResource: signed resource, signature is: ', resource.signatures[resource.signatures.length-1]);
+  return resource;
 }
 
 
@@ -308,12 +313,12 @@ async function maskRemoteResourceAsNewResource({ url, paths, token, connection, 
   });
 
   trace('#maskRemoteResourceAsNewResource: masking Resource content locally with maskResource');
-  const { resource } = maskResource({resource: original, urlToResource: url, paths, nonce, nonceurl});
+  let { resource } = maskResource({resource: original, urlToResource: url, paths, nonce, nonceurl});
 
   // If you want to sign it, now is a good time
   if (signatureCallback) {
     trace('#maskRemoteResourceAsNewResource: calling signatureCallback');
-    resource = signatureCallback(resource);
+    resource = await signatureCallback(resource);
   }
 
   // Now, put the resource back as the copy
@@ -331,10 +336,10 @@ async function maskRemoteResourceAsNewResource({ url, paths, token, connection, 
 async function maskAndSignRemoteResourceAsNewResource({url, privateJWK, signer, token, connection, paths}) {
   token = token || false;
   connection = connection || false;
-  return maskRemoteResourceAsNewResource({
+  return await maskRemoteResourceAsNewResource({
     url, signer, token, connection, paths, 
     signatureCallback: async (resource) => 
-      signResource({resource,privateJWK, signer, paths}) // returns the signed version of resource to maskRemoteResourceAsNewResource
+      await signResource({resource,privateJWK, signer, paths}) // returns the signed version of resource to maskRemoteResourceAsNewResource
   });
 }
 
@@ -367,6 +372,7 @@ async function reconstructOriginalFromMaskPaths(maskedResource, paths) {
 //   match: true|false => do ALL mask hashes match the original
 //   details: array of strings to help you debug
 // }
+// IMPORTANT NOTE: This does not yet support modification signatures, only masks and other non-modifying types.
 async function verifyRemoteResource({url, token, connection}) {
   const domain = domainFromURL(url);
   const path = pathFromURL(url);
@@ -377,11 +383,15 @@ async function verifyRemoteResource({url, token, connection}) {
   // First, verify the signature so we can get the mask-paths from that
   async function recursiveVerifyMaskSignatures(resource) {
     const sigResult = await tsig.verify(resource);
+    const { payload } = sigResult;
 
     let reconstructResult = { valid: true, match: true, resource: sigResult.original, details: [] };
     if (payload.type === 'mask') {
       // Reconstruct the original at this point by replacing each path from payload.mask-paths, also checking each mask as we go:
       reconstructResult = await reconstructOriginalFromMaskPaths(sigResult.original, payload['mask-paths']);
+    } else if (payload.type === 'modification') {
+      error('#verifyRemoteResource: modification signatures are not supported yet.  That feature needs to be added and rework this to play nicer with tsig by supplying tsig with a function it can use to reconstruct/validate a single mask signature');
+      throw new Error('#verifyRemoteResource: modifiation signature are not supported yet.');
     }
 
     // Now the original should be reconstructed, if there is still a signature we can ask for that

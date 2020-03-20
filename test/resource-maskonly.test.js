@@ -338,10 +338,18 @@ describe('Whole resource functions, only masks (not signatures)', function() {
       expect(putResource.location).to.deep.equal(t.mask1.location);
     });
 
-  });
-
-  describe('verifyRemoteResource', function() {
-
+    it('should call the signature callback', async function()  {
+      const url = t.urlToResource;
+      const paths = [ '/location' ];
+      let signatureCallback = false;
+      const callbackPromise = new Promise((resolve,reject) => {
+        signatureCallback = resolve(1);
+      });
+      const newResourceid = await ml.maskRemoteResourceAsNewResource({url, paths, connection, signatureCallback});
+      expect(newResourceid).to.equal(putResourceid);
+      expect(putResource.location).to.deep.equal(t.mask1.location);
+      expect(callbackPromise).to.eventually.equal(1);
+    });
 
   });
 
