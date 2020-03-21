@@ -11,6 +11,12 @@ const  info = debug('trellisfw-masklink:info');
 const  warn = debug('trellisfw-masklink:warn');
 const error = debug('trellisfw-masklink:error');
 
+//---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
+// Helpers:
+//---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
+
 async function connectionOrToken({connection,token,domain}) {
   if (!connection) {
     if (!token) throw new Error('trellisfw-masklink#connectionOrToken: You must pass either a token or an oada-cache connection');
@@ -102,12 +108,11 @@ function mask({original, url, nonce, nonceurl}) {
     // and fetching the thing to get the resources url in the content-location
     //nonceurl = url.replace(/(resources\/[^\/]+)(.*)$/, '$1/_meta/nonces$2');
   }
-  const o = _.cloneDeep(original);
-  o._nonce = nonce;
-  trace('hashing original = ', o);
+  // Since the original can be a string or a number in addition to an array or object,
+  // we construct an "outer" JSON object to hold it and put the nonce there
   const tm = {
     version: '1.0',
-    hashinfo: tsig.hashJSON(o),
+    hashinfo: tsig.hashJSON({original,nonce}),
     url,
     nonceurl,
   };
@@ -150,10 +155,8 @@ function verify({mask, original, nonce}) {
   const valid = true;
   const details = [];
 
-  const o = _.cloneDeep(original);
-  o._nonce = nonce;
-  const ohash = tsig.hashJSON(o);
-  details.push(`Comparing nonce-d original (${JSON.stringify(o)}) which hashes to (${JSON.stringify(ohash)}) to mask hash (${JSON.stringify(mask.hashinfo)})`);
+  const ohash = tsig.hashJSON({original,nonce});
+  details.push(`Comparing nonce-d original hash to (${JSON.stringify(ohash)}) to mask hash (${JSON.stringify(mask.hashinfo)})`);
   trace('#verify: '+details[details.length-1]); // print that message
   const match = _.isEqual(mask.hashinfo, ohash);
 
@@ -195,7 +198,7 @@ async function verifyRemote({mask, token, connection}) {
     return { valid: false, match: false, original: false, nonce: false, details };
   }
 
-  trace('#verifyRemote: retrieved original and nonce, sending to verify');
+  trace('#verifyRemote: retrieved original (',original,') and nonce, sending to verify');
   const result = verify({mask, original, nonce}); // returns { valid, match, details }
   return { 
     valid: result.valid, 
@@ -345,14 +348,15 @@ async function maskAndSignRemoteResourceAsNewResource({url, privateJWK, signer, 
 
 
 // Given a set of paths, reconstruct those paths in the original resource from the masks that are there.
-async function reconstructOriginalFromMaskPaths(maskedResource, paths) {
-  return Promise.map(paths, async (p) => {
+async function reconstructOriginalFromMaskPaths(maskedResource, paths, connection) {
+  const result = await Promise.map(paths, async (p) => {
     const mask = jsonpointer.get(maskedResource,p);
+    trace('#reconstructOriginalFromMaskPaths: retrieved path ',p,' from maskedResource and got mask = ', mask);
     const { valid, match, original, details } = await verifyRemote({mask,connection}); // valid, match, original, details
     return { path: p, valid, match, original, details };
   }).reduce((acc,p) => {
-    acc.details.push(`Path ${p.path}: valid = ${verifyResult.valid}, match = ${verifyResult.match}, details = ${JSON.stringify(verifyResult.details)}`);
-    jsonpointer.set(acc.resource, p.path, original);
+    acc.details.push(`Path ${p.path}: valid = ${p.valid}, match = ${p.match}, details = ${JSON.stringify(p.details)}`);
+    jsonpointer.set(acc.resource, p.path, p.original);
     return {
       valid: acc.valid && p.valid,
       match: acc.match && p.match,
@@ -360,6 +364,7 @@ async function reconstructOriginalFromMaskPaths(maskedResource, paths) {
       resource: acc.resource,
     };
   }, { valid: true, match: true, details: [], resource: maskedResource });
+  return result;
 }
 
 // This can take url to a masked resource and token or connection, and verify all the
@@ -380,27 +385,41 @@ async function verifyRemoteResource({url, token, connection}) {
 
   const maskedResource = await connection.get({path: pathFromURL(url)}).then(r => r.data)
                                .catch(e => { throw new Error(`Failed to retrieve masked resource from path ${pathFromURL(url)}.  Error was: ${e}`) });
+  trace('#verifyRemoteResource: retrieved masked resource, signatures = ', maskedResource.signatures);
+
   // First, verify the signature so we can get the mask-paths from that
   async function recursiveVerifyMaskSignatures(resource) {
-    const sigResult = await tsig.verify(resource);
-    const { payload } = sigResult;
-
-    let reconstructResult = { valid: true, match: true, resource: sigResult.original, details: [] };
-    if (payload.type === 'mask') {
-      // Reconstruct the original at this point by replacing each path from payload.mask-paths, also checking each mask as we go:
-      reconstructResult = await reconstructOriginalFromMaskPaths(sigResult.original, payload['mask-paths']);
-    } else if (payload.type === 'modification') {
-      error('#verifyRemoteResource: modification signatures are not supported yet.  That feature needs to be added and rework this to play nicer with tsig by supplying tsig with a function it can use to reconstruct/validate a single mask signature');
-      throw new Error('#verifyRemoteResource: modifiation signature are not supported yet.');
+    // If there is no signature, then unchanged and trusted must be false
+    let sigResult = { unchanged: false, trusted: false, match: true, valid: true, original: resource, details: [ 'No signature on resource' ]};
+    if (resource.signatures) {
+      sigResult = await tsig.verify(resource);
     }
+    const { payload } = sigResult;
+    if (!sigResult.valid) {
+      trace('#recursiveVerifyMaskSignatures: signature is invalid, aborting');
+      return { valid: false, match: false, unchanged: false, resource: sigResult.original, details: [ 'Signature is invalid' ] };
+    }
+
+    let reconstructResult = { valid: sigResult.valid, match: true, unchanged: true, resource: sigResult.original, details: [] };
+    if (payload) {
+      if (payload.type === 'mask') {
+        trace('#recursiveVerifyMaskSignatures: found mask signature, reconstructing...');
+        // Reconstruct the original at this point by replacing each path from payload.mask-paths, also checking each mask as we go:
+        reconstructResult = await reconstructOriginalFromMaskPaths(sigResult.original, payload['mask-paths'], connection);
+      } else if (payload.type === 'modification') {
+        error('#verifyRemoteResource: modification signatures are not supported yet.  That feature needs to be added and rework this to play nicer with tsig by supplying tsig with a function it can use to reconstruct/validate a single mask signature');
+        throw new Error('#verifyRemoteResource: modifiation signature are not supported yet.');
+      }
+    } // If no payload, then there wasn't a signature at all
 
     // Now the original should be reconstructed, if there is still a signature we can ask for that
     // one's result:
-    let nextRound = { trusted: true, valid: true, match: true, details: [], original: reconstructResult.resource};
+    let nextRound = { trusted: true, valid: true, unchanged: true, match: true, details: [], original: reconstructResult.resource};
     if (reconstructResult.resource.signatures) {
-      nextRound = recursiveVerifyMaskSignatures(reconstructResult.resource);
+      nextRound = await recursiveVerifyMaskSignatures(reconstructResult.resource);
     }
-   
+
+    // trace('Returning combination of sigResult: ', sigResult, ', nextRound: ', nextRound, ', and reconstructResult: ', reconstructResult);
     // Return a combination of this round, all the mask matches, and the next round's result
     return { 
         trusted: sigResult.trusted   && nextRound.trusted,
@@ -412,11 +431,15 @@ async function verifyRemoteResource({url, token, connection}) {
     };
   }
 
-  const { trusted, unchanged, valid, match, original, details } = recursiveVerifyMaskSignatures(maskedResource);
+  const { trusted, unchanged, valid, match, original, details } = await recursiveVerifyMaskSignatures(maskedResource);
   const paths = findAllMaskPathsInResource(original);
-  if (!paths || paths.length < 1) return { trusted, unchanged, valid, match, original, details };
+  details.push('After verifying signatures, these mask paths remained in resource: ', JSON.stringify(paths));
+  trace('#verifyRemoteResource: after verifying signatures, these mask paths remain in resource: ', paths);
+  if (!paths || paths.length < 1) {
+    return { trusted, unchanged, valid, match, original, details };
+  }
   // Otherwise, we need to reconstruct these and merge:
-  const reconstructResult = await reconstructOriginalFromMaskPaths(original, paths);
+  const reconstructResult = await reconstructOriginalFromMaskPaths(original, paths, connection);
   return {
     trusted,
     unchanged, 

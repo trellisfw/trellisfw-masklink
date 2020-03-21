@@ -31,9 +31,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0;
 const ml = require('../index.js'); // mask&link library
 
 function tmpMakeMeAHash(original, nonce) {
-  const o = _.cloneDeep(original);
-  o._nonce = nonce;
-  return tsig.hashJSON(o);
+  return tsig.hashJSON({original,nonce});
 }
 const urlToResource = 'https://trusted.com/resources/1';
 const t = {
@@ -271,11 +269,11 @@ describe('Whole resource functions, only masks (not signatures)', function() {
     });
 
     it('should throw when no url is passed', async function() {
-      expect(ml.maskRemoteResourceAsNewResource({})).to.eventually.throw();
+      expect(ml.maskRemoteResourceAsNewResource({})).to.eventually.be.rejected;
     });
     it('should throw when an empty paths array is passed', async function() {
       const url = 'https://trusted.com/resources/1';
-      expect(ml.maskRemoteResourceAsNewResource({url,paths: []})).to.eventually.throw();
+      expect(ml.maskRemoteResourceAsNewResource({url,paths: []})).to.eventually.be.rejected;
     });
 
     it('should work when it has all the right stuff', async function()  {
@@ -304,7 +302,7 @@ describe('Whole resource functions, only masks (not signatures)', function() {
       const url = 'https://trusted.com/resources/doesnotexist';
       const paths = [ '/location' ];
       expect(ml.maskRemoteResourceAsNewResource({url, paths, connection}))
-        .to.eventually.throw();
+        .to.eventually.be.rejected;
     });
 
     it('should throw when it cannot create the new resource', async function() {

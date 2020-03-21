@@ -31,9 +31,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0;
 const ml = require('../index.js'); // mask&link library
 
 function tmpMakeMeAHash(original, nonce) {
-  const o = _.cloneDeep(original);
-  o._nonce = nonce;
-  return tsig.hashJSON(o);
+  return tsig.hashJSON({original,nonce});
 }
 const t = {
   nonce: 'abcdefg',
