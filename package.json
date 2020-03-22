@@ -1,6 +1,6 @@
 {
   "name": "@trellisfw/masklink",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Trellis Framework Mask&Link Library",
   "main": "index.js",
   "scripts": {
@@ -29,9 +29,11 @@
     "debug": "^4.1.1",
     "json-pointer": "^0.6.0",
     "lodash": "^4.17.15",
+    "minim": "^0.23.6",
     "url": "^0.11.0"
   },
   "devDependencies": {
+    "minimist": "^1.2.5",
     "mocha": "^7.1.1",
     "nock": "^12.0.3"
   }

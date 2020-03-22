@@ -62,6 +62,7 @@ function domainForMask(mask) {
 function findAllMaskPathsInResource(resource) {
   function recursiveFindMaskPaths(curobj, curpath) {
     // No more paths to be found down this branch
+    if (!curobj) return [];
     if (typeof curobj !== 'object') return [];
     // Do we terminate search at this path?
     if (curobj['trellis-mask']) return [ curpath ];
