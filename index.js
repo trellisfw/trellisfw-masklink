@@ -382,7 +382,7 @@ async function reconstructOriginalFromMaskPaths(maskedResource, paths, connectio
 async function verifyRemoteResource({url, token, connection}) {
   const domain = domainFromURL(url);
   const path = pathFromURL(url);
-  connection = await connectionOrToken({token: (token ? token : false), connection: (connection ? connection : false)});
+  connection = await connectionOrToken({domain, token: (token ? token : false), connection: (connection ? connection : false)});
 
   const maskedResource = await connection.get({path: pathFromURL(url)}).then(r => r.data)
                                .catch(e => { throw new Error(`Failed to retrieve masked resource from path ${pathFromURL(url)}.  Error was: ${e}`) });

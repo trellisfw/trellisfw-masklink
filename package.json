@@ -1,6 +1,6 @@
 {
   "name": "@trellisfw/masklink",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Trellis Framework Mask&Link Library",
   "main": "index.js",
   "scripts": {
