@@ -312,7 +312,7 @@ async function maskRemoteResourceAsNewResource({ url, paths, token, connection, 
   }).catch(async (e) => {
     trace('#maskRemoteResourceAsNewResource: original does not have a nonce, making a new one and saving to '+pathFromURL(nonceurl));
     nonce = makeNonce();
-    await connection.put({ path: pathFromURL(nonceurl), data: JSON.stringify(nonce), headers: { 'content-type': original._type } })
+    await connection.put({ path: pathFromURL(nonceurl), data: nonce, headers: { 'content-type': original._type } })
           .catch(e => { throw new Error(`Could not save new nonce back to original resource!  error was ${e}`) });
   });
 
