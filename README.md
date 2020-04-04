@@ -1,9 +1,30 @@
 # trellisfw-masklink
 
-Library for performing Mask & Link operations.  
+Library for performing Trellis Mask & Link operations.  See below for an overview.
+
+## Basic Usage
+
+```javascript
+import ml from '@trellisfw/masklink'
+// You can make a private JWK key with https://github.com/oada/oada-certs
+import privateJWK from './private_jwk.json'
+
+let url = 'https://my.trellis.domain/resources/123';
+const paths = [ 'organization/location', 'scope/organization/location' ];
+const token = 'mydummytoken';
+const signer = { name: "Sam I Am", url: "https://domain.com" };
+
+const maskedResourceid = await ml.maskAndSignRemoteResourceAsNewResource({url, privateJWK, signer, token, paths});
+console.log('The new masked resourceid at the remote URL is: ', maskedResourceid);
+
+
+url = `https://my.trellis.domain/${maskedResourceid}` 
+const { trusted, unchanged, valid, match, original, details } = await ml.verifyRemoteResource({url, token});
+console.log('The remote resource was trusted? ',trusted, ', unchanged? ', unchanged, ', valid? ', valid, ', match? ', match);
+```
 
 ## Overview
----------------------
+
 When you have information in a JSON document that you do not want to
 share with someone, but you need to share the rest of the document, 
 you can replace the sensitive information with a auditable `trellis-mask`.
@@ -53,7 +74,6 @@ And you want to _mask_ the `location` key, the _masked_ version would look like:
 
 
 ## API for Masked Objects (not full documents)
--------------------------------------------------
 
 ### `mask({ original, url, nonce, nonceurl })` _synchronous_
 * `original`: _required_: the object to be hashed and masked
@@ -98,7 +118,7 @@ Returns `{ valid, match, original, nonce, details }`
 
 
 ## API for Full Documents Containing Masks
----------------------------------------------
+
 ### `maskResource({ resource, urlToResource, paths, nonce, nonceurl })` _synchronous_
 Given an entire JSON document, use the list of json-pointer paths to mask some of its contents.
 * `resource` _required_: the original resource to be masked
@@ -157,7 +177,7 @@ Returns `{ trusted, unchanged, valid, match, original, details }`
 
 
 ## Exposed Helper Functions
----------------------------------------------
+
 ### `isMask(obj)` _synchronous_
 Returns `true` if `obj` has all the appropriate keys to be a trellis-mask.
 
